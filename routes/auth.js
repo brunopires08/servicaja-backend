@@ -2,35 +2,37 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const pool = require('../database');
 
 const SECRET = 'servicaja_secret_2026';
-
-let usuarios = [];
 
 // POST /auth/cadastro
 router.post('/cadastro', async (req, res) => {
   try {
     const { nome, email, senha, tipo } = req.body;
 
-    const existe = usuarios.find(u => u.email === email);
-    if (existe) {
+    // Verifica se já existe
+    const existe = await pool.query(
+      'SELECT id FROM usuarios WHERE email = $1',
+      [email]
+    );
+    if (existe.rows.length > 0) {
       return res.status(400).json({ erro: 'Email já cadastrado!' });
     }
 
+    // Criptografa a senha
     const senhaCriptografada = await bcrypt.hash(senha, 10);
 
-    const novoUsuario = {
-      id: usuarios.length + 1,
-      nome,
-      email,
-      senha: senhaCriptografada,
-      tipo,
-    };
+    // Salva no banco
+    const resultado = await pool.query(
+      'INSERT INTO usuarios (nome, email, senha_hash, tipo) VALUES ($1, $2, $3, $4) RETURNING id, nome, email, tipo',
+      [nome, email, senhaCriptografada, tipo]
+    );
 
-    usuarios.push(novoUsuario);
+    const usuario = resultado.rows[0];
 
     const token = jwt.sign(
-      { id: novoUsuario.id, email, tipo },
+      { id: usuario.id, email, tipo },
       SECRET,
       { expiresIn: '7d' }
     );
@@ -38,10 +40,11 @@ router.post('/cadastro', async (req, res) => {
     res.status(201).json({
       mensagem: 'Cadastro realizado!',
       token,
-      usuario: { id: novoUsuario.id, nome, email, tipo }
+      usuario
     });
 
   } catch (erro) {
+    console.error(erro);
     res.status(500).json({ erro: 'Erro interno do servidor' });
   }
 });
@@ -51,12 +54,20 @@ router.post('/login', async (req, res) => {
   try {
     const { email, senha } = req.body;
 
-    const usuario = usuarios.find(u => u.email === email);
-    if (!usuario) {
+    // Busca no banco
+    const resultado = await pool.query(
+      'SELECT * FROM usuarios WHERE email = $1',
+      [email]
+    );
+
+    if (resultado.rows.length === 0) {
       return res.status(401).json({ erro: 'Email ou senha inválidos!' });
     }
 
-    const senhaCorreta = await bcrypt.compare(senha, usuario.senha);
+    const usuario = resultado.rows[0];
+
+    // Verifica a senha
+    const senhaCorreta = await bcrypt.compare(senha, usuario.senha_hash);
     if (!senhaCorreta) {
       return res.status(401).json({ erro: 'Email ou senha inválidos!' });
     }
@@ -79,6 +90,7 @@ router.post('/login', async (req, res) => {
     });
 
   } catch (erro) {
+    console.error(erro);
     res.status(500).json({ erro: 'Erro interno do servidor' });
   }
 });
