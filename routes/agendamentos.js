@@ -1,14 +1,9 @@
-// routes/agendamentos.js
-// Rotas de agendamento — criar, listar, cancelar
-
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const pool = require('../database');
 
 const SECRET = 'servicaja_secret_2026';
-
-// Banco temporário em memória
-let agendamentos = [];
 
 // Middleware — verifica se o usuário está logado
 function verificarToken(req, res, next) {
@@ -18,56 +13,76 @@ function verificarToken(req, res, next) {
   }
   try {
     const decoded = jwt.verify(token, SECRET);
-    req.usuario = decoded; // salva os dados do usuário na requisição
-    next(); // continua para a rota
+    req.usuario = decoded;
+    next();
   } catch {
     res.status(401).json({ erro: 'Token inválido!' });
   }
 }
 
-// POST /agendamentos — cria um novo agendamento
-router.post('/', verificarToken, (req, res) => {
-  const { prestadorNome, servico, data, hora, preco } = req.body;
+// POST /agendamentos — cria novo agendamento
+router.post('/', verificarToken, async (req, res) => {
+  try {
+    const { prestadorNome, servico, data, hora, preco } = req.body;
 
-  const novoAgendamento = {
-    id: agendamentos.length + 1,
-    usuarioId: req.usuario.id,
-    prestadorNome,
-    servico,
-    data,
-    hora,
-    preco,
-    status: 'pendente',
-    criadoEm: new Date().toISOString(),
-  };
+    const resultado = await pool.query(
+      `INSERT INTO agendamentos 
+       (usuario_id, prestador_nome, servico, data, hora, preco, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pendente')
+       RETURNING *`,
+      [req.usuario.id, prestadorNome, servico, data, hora, preco]
+    );
 
-  agendamentos.push(novoAgendamento);
+    res.status(201).json({
+      mensagem: 'Agendamento criado!',
+      agendamento: resultado.rows[0]
+    });
 
-  res.status(201).json({
-    mensagem: 'Agendamento criado!',
-    agendamento: novoAgendamento
-  });
-});
-
-// GET /agendamentos — lista agendamentos do usuário logado
-router.get('/', verificarToken, (req, res) => {
-  const meusAgendamentos = agendamentos.filter(
-    ag => ag.usuarioId === req.usuario.id
-  );
-  res.json(meusAgendamentos);
-});
-
-// PATCH /agendamentos/:id/cancelar — cancela um agendamento
-router.patch('/:id/cancelar', verificarToken, (req, res) => {
-  const id = parseInt(req.params.id);
-  const ag = agendamentos.find(a => a.id === id && a.usuarioId === req.usuario.id);
-
-  if (!ag) {
-    return res.status(404).json({ erro: 'Agendamento não encontrado!' });
+  } catch (erro) {
+    console.error(erro);
+    res.status(500).json({ erro: 'Erro interno do servidor' });
   }
+});
 
-  ag.status = 'cancelado';
-  res.json({ mensagem: 'Agendamento cancelado!', agendamento: ag });
+// GET /agendamentos — lista agendamentos do usuário
+router.get('/', verificarToken, async (req, res) => {
+  try {
+    const resultado = await pool.query(
+      `SELECT * FROM agendamentos 
+       WHERE usuario_id = $1 
+       ORDER BY criado_em DESC`,
+      [req.usuario.id]
+    );
+    res.json(resultado.rows);
+  } catch (erro) {
+    console.error(erro);
+    res.status(500).json({ erro: 'Erro interno do servidor' });
+  }
+});
+
+// PATCH /agendamentos/:id/cancelar
+router.patch('/:id/cancelar', verificarToken, async (req, res) => {
+  try {
+    const resultado = await pool.query(
+      `UPDATE agendamentos SET status = 'cancelado'
+       WHERE id = $1 AND usuario_id = $2
+       RETURNING *`,
+      [req.params.id, req.usuario.id]
+    );
+
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Agendamento não encontrado!' });
+    }
+
+    res.json({
+      mensagem: 'Agendamento cancelado!',
+      agendamento: resultado.rows[0]
+    });
+
+  } catch (erro) {
+    console.error(erro);
+    res.status(500).json({ erro: 'Erro interno do servidor' });
+  }
 });
 
 module.exports = router;
